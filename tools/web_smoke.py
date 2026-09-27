@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Headless smoke test for the web build.
 
-Loads web/index.html from file://, waits for the wasm runtime, checks that the
+Loads web/index.html from file:// (or the live site when RAYCASTER_URL is
+set), waits for the wasm runtime, checks that the
 canvas actually shows the game (non-black pixels + text cells), drives a few
 keys, and screenshots before/after.  Exits non-zero on any console error or if
 the canvas stayed black.
 
     python3 tools/web_smoke.py [screenshot_dir]
+    RAYCASTER_URL=https://user.github.io/repo/ python3 tools/web_smoke.py
 """
+import os
 import pathlib
 import sys
 import time
@@ -15,7 +18,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-URL = (ROOT / "web" / "index.html").as_uri()
+URL = os.environ.get("RAYCASTER_URL") or (ROOT / "web" / "index.html").as_uri()
 OUT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp")
 
 errors = []
