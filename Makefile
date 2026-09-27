@@ -54,7 +54,10 @@ dist: $(TARGET)
 #   git clone https://github.com/emscripten-core/emsdk.git && cd emsdk
 #   ./emsdk install latest && ./emsdk activate latest && source emsdk_env.sh
 EMCC     ?= emcc
-NODE     ?= node
+# In CI the emsdk prepends its own directory to PATH, where `node` resolves to
+# the SDK's node *directory* (not an executable); use the interpreter the SDK
+# exports via EMSDK_NODE when present, plain `node` otherwise.
+NODE     ?= $(if $(EMSDK_NODE),$(EMSDK_NODE),node)
 WEBFLAGS  = -std=c99 -Wall -Wextra -pedantic \
 	-sWASM=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB \
 	-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU32 \
