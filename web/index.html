@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>RAYCASTER — escape the maze</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#07080c; overflow:hidden;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color:#7f93b5; -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent; touch-action:none; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    padding-top:30px; }               /* keep the legend clear of the HUD row */
+  body.touch #stage { padding-top:0; }
+  #screen { image-rendering:pixelated; image-rendering:crisp-edges; background:#000; display:block; }
+  #legend { position:fixed; top:0; left:0; right:0; text-align:center; font-size:11px;
+    line-height:1.6; padding:5px 8px; color:#5d6f8f; pointer-events:none;
+    text-shadow:0 1px 2px #000; z-index:3; white-space:nowrap; overflow:hidden; }
+  #legend b { color:#9db4d8; font-weight:600; }
+
+  /* ---- touch controls: only on coarse pointers ---- */
+  .pad, #acts { display:none; }
+  body.touch .pad, body.touch #acts { display:grid; }
+  .pad { position:fixed; bottom:max(12px, env(safe-area-inset-bottom));
+    grid-template-columns:repeat(3,52px); grid-template-rows:repeat(3,52px); gap:6px; z-index:5; }
+  #padMove { left:max(12px, env(safe-area-inset-left)); }
+  #padLook { right:max(12px, env(safe-area-inset-right)); }
+  #acts { position:fixed; bottom:max(12px, env(safe-area-inset-bottom)); left:50%;
+    transform:translateX(-50%); grid-auto-flow:column; gap:6px; z-index:5; }
+  .btn { width:52px; height:52px; border-radius:11px; border:1px solid #2a3a55;
+    background:#121a2bcc; color:#9db4d8; font:600 16px/1 ui-monospace, Menlo, monospace;
+    display:flex; align-items:center; justify-content:center; padding:0;
+    user-select:none; -webkit-user-select:none; touch-action:none; }
+  .btn.held { background:#27406bdd; border-color:#4d6ea8; color:#e8f0ff; }
+  .btn.sm { width:44px; height:44px; font-size:14px; border-radius:10px; }
+  .ghost { visibility:hidden; }
+  body.touch #legend { display:none; }
+  @media (max-height:430px) {
+    .btn { width:44px; height:44px; font-size:14px; }
+    .pad { grid-template-columns:repeat(3,44px); grid-template-rows:repeat(3,44px); }
+  }
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="screen" width="160" height="96"></canvas></div>
+
+  <div id="legend"><b>WASD</b> move &middot; <b>J/L</b> or <b>&larr;/&rarr;</b> turn &middot;
+    <b>I/K</b> or <b>&uarr;/&darr;</b> look &middot; <b>, / .</b> strafe &middot; <b>[ ]</b> fov &middot;
+    <b>shift</b> run &middot; <b>G</b> autopilot &middot; <b>M</b> map &middot; <b>F</b> floor &middot;
+    <b>P</b> pause &middot; <b>H</b> help &middot; <b>R</b> new maze &middot; <b>Q</b> quit</div>
+
+  <div class="pad" id="padMove">
+    <span class="ghost"></span><button class="btn" data-key="w" type="button">&#9650;</button><span class="ghost"></span>
+    <button class="btn" data-key="a" type="button">&#9664;</button><button class="btn" data-key="s" type="button">&#9660;</button><button class="btn" data-key="d" type="button">&#9654;</button>
+    <span class="ghost"></span><button class="btn" data-key="run" type="button">RUN</button><span class="ghost"></span>
+  </div>
+
+  <div class="pad" id="padLook">
+    <span class="ghost"></span><button class="btn" data-key="ArrowUp" type="button">&#9650;</button><span class="ghost"></span>
+    <button class="btn" data-key="ArrowLeft" type="button">&#9664;</button><button class="btn" data-key="ArrowDown" type="button">&#9660;</button><button class="btn" data-key="ArrowRight" type="button">&#9654;</button>
+    <span class="ghost"></span><button class="btn" data-key="g" type="button">G</button><span class="ghost"></span>
+  </div>
+
+  <div id="acts">
+    <button class="btn sm" data-key="m" type="button">M</button>
+    <button class="btn sm" data-key="f" type="button">F</button>
+    <button class="btn sm" data-key="c" type="button">C</button>
+    <button class="btn sm" data-key="p" type="button">P</button>
+    <button class="btn sm" data-key="h" type="button">H</button>
+    <button class="btn sm" data-key="r" type="button">R</button>
+    <button class="btn sm" data-key="q" type="button">Q</button>
+  </div>
+
+<script>
+  /* Emscripten glue config.  raycaster.js (single-file: wasm inlined) loads
+   * right after this and exposes the C exports on Module: _web_key (key byte
+   * queue), _web_resize, _web_rgba (scene pixels), _web_text_* (HUD glyphs). */
+  var Module = {
+    canvas:   document.getElementById('screen'),
+    print:    function (t) { console.log(t); },
+    printErr: function (t) { console.error(t); }
+  };
+</script>
+<script src="raycaster.js"></script>
+<script>
+(function () {
+  'use strict';
+  /* ---------------- key -> terminal byte stream (shared with native) ------- */
+  var KEYS = {
+    'w':[119], 's':[115], 'a':[97], 'd':[100],            /* move             */
+    'W':[87],  'S':[83],  'A':[65], 'D':[68],             /* move + sprint    */
+    'j':[106], 'l':[108], 'i':[105], 'k':[107],           /* turn / look      */
+    ',':[44], '.':[46],                                   /* strafe           */
+    '-':[45], '=':[61], '[':[91], ']':[93],               /* light / fov      */
+    'm':[109], 'f':[102], 'c':[99], 'g':[103],            /* toggles          */
+    'p':[112], 'h':[104], 't':[116],
+    'r':[114], 'R':[82], 'q':[113], 'Q':[81],
+    'Escape':[27],                                        /* quit             */
+    'ArrowUp':[27,91,65], 'ArrowDown':[27,91,66],         /* CSI A/B/C/D      */
+    'ArrowRight':[27,91,67], 'ArrowLeft':[27,68]
+  };
+  var REPEATABLE = {};
+  ['w','s','a','d','W','S','A','D','j','l','i','k',',','.','-','=','[',']',
+   'ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].forEach(function (k) {
+    REPEATABLE[k] = true;
+  });
+  var REPEAT_MS = 75;             /* terminal auto-repeat, minus the delay   */
+
+  var ready = false;
+  var held  = Object.create(null);
+  var last  = Object.create(null);
+
+  function send(tok) {
+    if (tok.length === 1 && 'wasd'.indexOf(tok) >= 0 && held.run)
+      tok = tok.toUpperCase();      /* RUN button acts like holding shift     */
+    var bs = KEYS[tok];
+    if (!bs) return;
+    for (var i = 0; i < bs.length; i++) Module._web_key(bs[i]);
+  }
+
+  function press(tok) {
+    if (!ready) return;
+    if (tok === 'run') { held.run = true; return; }
+    if (!KEYS[tok] || held[tok]) return;                 /* ignore OS repeat  */
+    held[tok] = true;
+    last[tok] = Date.now();
+    send(tok);
+  }
+
+  function release(tok) { held[tok] = false; }
+  function clearHeld()  { held = Object.create(null); }
+
+  function pumpRepeats(now) {
+    for (var tok in held) {
+      if (!held[tok] || !REPEATABLE[tok]) continue;
+      if (now - last[tok] >= REPEAT_MS) { last[tok] = now; send(tok); }
+    }
+  }
+
+  /* ---------------- desktop keyboard -------------------------------------- */
+  window.addEventListener('keydown', function (e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;       /* keep shortcuts    */
+    if (!KEYS[e.key]) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    press(e.key);
+  });
+  window.addEventListener('keyup', function (e) { release(e.key); });
+  window.addEventListener('blur', clearHeld);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) clearHeld();
+  });
+
+  /* ---------------- touch buttons ----------------------------------------- */
+  function bindButton(el) {
+    var tok = el.getAttribute('data-key');
+    el.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      el.classList.add('held');
+      press(tok);
+    });
+    ['pointerup', 'pointercancel'].forEach(function (ev) {
+      el.addEventListener(ev, function () {
+        el.classList.remove('held');
+        release(tok);
+      });
+    });
+    el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    el.addEventListener('click', function (e) { e.preventDefault(); });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('[data-key]'), bindButton);
+
+  if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
+      ('ontouchstart' in window)) {
+    document.body.classList.add('touch');
+  }
+  /* ---------------- grid sizing: one character cell = P x 2*P pixels ------- */
+  var P = 6;
+
+  function layout() {
+    var vw = window.innerWidth;
+    var vh = window.innerHeight -
+             (document.body.classList.contains('touch') ? 0 : 30); /* legend */
+    var p = Math.floor(Math.min(vw / 132, vh / 76));
+    if (p < 3)  p = 3;
+    if (p > 14) p = 14;
+    var cols = Math.floor(vw / p), rows = Math.floor(vh / (2 * p));
+    if (cols > 260) cols = 260;
+    if (rows > 110) rows = 110;
+    P = p;
+    if (ready) Module._web_resize(cols, rows);
+  }
+
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(layout, 120);
+  });
+
+  /* ---------------- painting: scene image + glyph overlay ----------------- */
+  var display = document.getElementById('screen');
+  var dctx    = display.getContext('2d');
+  var small   = document.createElement('canvas');
+  var sctx    = small.getContext('2d');
+  var img = null, imgW = 0, imgH = 0;
+
+  function hex(v) { return '#' + ('000000' + (v & 0xffffff).toString(16)).slice(-6); }
+
+  function paint(now) {
+    pumpRepeats(now);
+    if (!ready) return;
+    var cols = Module._web_cols(), rows = Module._web_rows();
+    if (!cols || !rows) return;                          /* first frame pending */
+
+    var pw = cols, ph = rows * 2;                        /* half-block pixels   */
+    if (imgW !== pw || imgH !== ph) {
+      small.width = pw; small.height = ph;
+      img = sctx.createImageData(pw, ph);
+      imgW = pw; imgH = ph;
+    }
+    var ptr = Module._web_rgba();
+    if (!ptr) return;
+    img.data.set(Module.HEAPU8.subarray(ptr, ptr + pw * ph * 4));
+    sctx.putImageData(img, 0, 0);
+
+    var W = cols * P, H = rows * 2 * P;
+    if (display.width !== W || display.height !== H) {
+      display.width = W; display.height = H;
+      dctx.imageSmoothingEnabled = false;
+    }
+    dctx.drawImage(small, 0, 0, W, H);
+
+    /* HUD, minimap, help: text cells over the scene */
+    var n = Module._web_text_count(), tp = Module._web_text_ptr();
+    if (n > 0 && tp) {
+      var U = Module.HEAPU32, base = tp >>> 2;
+      var cellH = 2 * P;
+      dctx.font = '600 ' + Math.round(cellH * 0.58) +
+                  'px ui-monospace, Menlo, Consolas, monospace';
+      dctx.textAlign = 'center';
+      dctx.textBaseline = 'middle';
+      var cur = -1;                     /* last fillStyle set, fg or bg      */
+      for (var i = 0; i < n; i++) {
+        var o = base + i * 5;
+        var x = U[o], y = U[o + 1], ch = U[o + 2], c1 = U[o + 3], c2 = U[o + 4];
+        if (c2 !== cur) { cur = c2; dctx.fillStyle = hex(c2); }
+        dctx.fillRect(x * P, y * cellH, P, cellH);
+        if (c1 !== c2) {
+          if (c1 !== cur) { cur = c1; dctx.fillStyle = hex(c1); }
+          dctx.fillText(String.fromCharCode(ch), (x + 0.5) * P, (y + 0.5) * cellH);
+        }
+      }
+    }
+  }
+
+  function loop() { paint(Date.now()); requestAnimationFrame(loop); }
+
+  /* ---------------- wait for the wasm runtime, then go --------------------- */
+  (function poll() {
+    if (typeof Module._web_key === 'function') {
+      ready = true;
+      layout();
+      requestAnimationFrame(loop);
+    } else {
+      setTimeout(poll, 30);
+    }
+  }());
+}());
+</script>
+</body>
+</html>
