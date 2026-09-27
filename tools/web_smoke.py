@@ -36,7 +36,7 @@ def canvas_stats(page):
             sum += v;
         }
         return { w: c.width, h: c.height, lit, n: d.length / 4,
-                 avg: sum / (d.length / 4) };
+                 avg: sum / (d.length / 4), sum };
     }"""
     )
 
@@ -57,8 +57,8 @@ with sync_playwright() as pw:
     s1 = canvas_stats(page)
     page.screenshot(path=str(OUT / "web_smoke_1.png"))
 
-    # walk forward, turn, toggle the minimap, open help
-    for key in ["w", "w", "ArrowRight", "m", "h"]:
+    # walk forward, turn (both directions), toggle the minimap, open help
+    for key in ["w", "w", "ArrowRight", "ArrowLeft", "m", "h"]:
         page.keyboard.down(key)
         time.sleep(0.12)
         page.keyboard.up(key)
@@ -67,15 +67,25 @@ with sync_playwright() as pw:
 
     s2 = canvas_stats(page)
     page.screenshot(path=str(OUT / "web_smoke_2.png"))
+
+    # Liveness: the frame must keep changing on its own.  A stray quit (e.g. an
+    # arrow key mis-sent as a bare ESC) cancels the main loop and freezes the
+    # last frame — which would otherwise pass every check above.
+    f1 = canvas_stats(page)
+    time.sleep(0.4)
+    f2 = canvas_stats(page)
+    live = f1["sum"] != f2["sum"]
     browser.close()
 
 print(f"frame 1: {s1['w']}x{s1['h']} lit={s1['lit']}/{s1['n']} avg={s1['avg']:.1f}")
 print(f"frame 2: {s2['w']}x{s2['h']} lit={s2['lit']}/{s2['n']} avg={s2['avg']:.1f}")
+print("still animating:", "yes" if live else "NO (main loop frozen)")
 print("console errors:", errors if errors else "none")
 
 ok = (
     s1["lit"] > s1["n"] * 0.05          # scene is on screen
     and s2["w"] == s1["w"]               # still running (no crash)
+    and live                             # main loop not cancelled
     and not errors
 )
 print("RESULT:", "PASS" if ok else "FAIL")
